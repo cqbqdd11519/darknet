@@ -608,7 +608,7 @@ image make_empty_image(int w, int h, int c)
 image make_image(int w, int h, int c)
 {
     image out = make_empty_image(w,h,c);
-    out.data = calloc(h*w*c, sizeof(float));
+    out.data = (float*)aligned_alloc(64, h*w*c*sizeof(float));
     return out;
 }
 

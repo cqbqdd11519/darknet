@@ -1,4 +1,9 @@
 #include "darknet.h"
+#include "cl_vfpga.hpp"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 static int coco_ids[] = {1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,20,21,22,23,24,25,27,28,31,32,33,34,35,36,37,38,39,40,41,42,43,44,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,67,70,72,73,74,75,76,77,78,79,80,81,82,84,85,86,87,88,89,90};
 
@@ -13,7 +18,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     char *base = basecfg(cfgfile);
     printf("%s\n", base);
     float avg_loss = -1;
-    network **nets = calloc(ngpus, sizeof(network));
+    network **nets = (network**)calloc(ngpus, sizeof(network));
 
     srand(time(0));
     int seed = rand();
@@ -224,8 +229,8 @@ void print_imagenet_detections(FILE *fp, int id, detection *dets, int total, int
         if (ymax > h) ymax = h;
 
         for(j = 0; j < classes; ++j){
-            int class = j;
-            if (dets[i].prob[class]) fprintf(fp, "%d %d %f %f %f %f %f\n", id, j+1, dets[i].prob[class],
+            int classidx = j;
+            if (dets[i].prob[classidx]) fprintf(fp, "%d %d %f %f %f %f %f\n", id, j+1, dets[i].prob[classidx],
                     xmin, ymin, xmax, ymax);
         }
     }
@@ -274,7 +279,7 @@ void validate_detector_flip(char *datacfg, char *cfgfile, char *weightfile, char
         classes = 200;
     } else {
         if(!outfile) outfile = "comp4_det_test_";
-        fps = calloc(classes, sizeof(FILE *));
+        fps = (FILE**)calloc(classes, sizeof(FILE *));
         for(j = 0; j < classes; ++j){
             snprintf(buff, 1024, "%s/%s%s.txt", prefix, outfile, names[j]);
             fps[j] = fopen(buff, "w");
@@ -289,11 +294,11 @@ void validate_detector_flip(char *datacfg, char *cfgfile, char *weightfile, char
     float nms = .45;
 
     int nthreads = 4;
-    image *val = calloc(nthreads, sizeof(image));
-    image *val_resized = calloc(nthreads, sizeof(image));
-    image *buf = calloc(nthreads, sizeof(image));
-    image *buf_resized = calloc(nthreads, sizeof(image));
-    pthread_t *thr = calloc(nthreads, sizeof(pthread_t));
+    image *val = (image*)calloc(nthreads, sizeof(image));
+    image *val_resized = (image*)calloc(nthreads, sizeof(image));
+    image *buf = (image*)calloc(nthreads, sizeof(image));
+    image *buf_resized = (image*)calloc(nthreads, sizeof(image));
+    pthread_t *thr = (pthread_t*)calloc(nthreads, sizeof(pthread_t));
 
     image input = make_image(net->w, net->h, net->c*2);
 
@@ -404,7 +409,7 @@ void validate_detector(char *datacfg, char *cfgfile, char *weightfile, char *out
         classes = 200;
     } else {
         if(!outfile) outfile = "comp4_det_test_";
-        fps = calloc(classes, sizeof(FILE *));
+        fps = (FILE**)calloc(classes, sizeof(FILE *));
         for(j = 0; j < classes; ++j){
             snprintf(buff, 1024, "%s/%s%s.txt", prefix, outfile, names[j]);
             fps[j] = fopen(buff, "w");
@@ -420,11 +425,11 @@ void validate_detector(char *datacfg, char *cfgfile, char *weightfile, char *out
     float nms = .45;
 
     int nthreads = 4;
-    image *val = calloc(nthreads, sizeof(image));
-    image *val_resized = calloc(nthreads, sizeof(image));
-    image *buf = calloc(nthreads, sizeof(image));
-    image *buf_resized = calloc(nthreads, sizeof(image));
-    pthread_t *thr = calloc(nthreads, sizeof(pthread_t));
+    image *val = (image*)calloc(nthreads, sizeof(image));
+    image *val_resized = (image*)calloc(nthreads, sizeof(image));
+    image *buf = (image*)calloc(nthreads, sizeof(image));
+    image *buf_resized = (image*)calloc(nthreads, sizeof(image));
+    pthread_t *thr = (pthread_t*)calloc(nthreads, sizeof(pthread_t));
 
     load_args args = {0};
     args.w = net->w;
@@ -567,6 +572,7 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
 
     image **alphabet = load_alphabet();
     network *net = load_network(cfgfile, weightfile, 0);
+    CLvFPGA resizer;
     set_batch_network(net, 1);
     srand(2222222);
     double time;
@@ -584,7 +590,9 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
             strtok(input, "\n");
         }
         image im = load_image_color(input,0,0);
-        image sized = letterbox_image(im, net->w, net->h);
+        //image sized = letterbox_image(im, net->w, net->h);
+        image sized = resizer.runResize(im);
+        save_image(sized, "resized");
         //image sized = resize_image(im, net->w, net->h);
         //image sized2 = resize_max(im, net->w);
         //image sized = crop_image(sized2, -((net->w - sized2.w)/2), -((net->h - sized2.h)/2), net->w, net->h);
@@ -811,7 +819,7 @@ void run_detector(int argc, char **argv)
         for(i = 0; i < len; ++i){
             if (gpu_list[i] == ',') ++ngpus;
         }
-        gpus = calloc(ngpus, sizeof(int));
+        gpus = (int*)calloc(ngpus, sizeof(int));
         for(i = 0; i < ngpus; ++i){
             gpus[i] = atoi(gpu_list);
             gpu_list = strchr(gpu_list, ',')+1;
@@ -848,3 +856,7 @@ void run_detector(int argc, char **argv)
     //else if(0==strcmp(argv[2], "extract")) extract_detector(datacfg, cfg, weights, cam_index, filename, class, thresh, frame_skip);
     //else if(0==strcmp(argv[2], "censor")) censor_detector(datacfg, cfg, weights, cam_index, filename, class, thresh, frame_skip);
 }
+#ifdef __cplusplus
+}
+#endif
+
