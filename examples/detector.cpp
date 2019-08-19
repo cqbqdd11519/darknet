@@ -592,7 +592,6 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
         image im = load_image_color(input,0,0);
         //image sized = letterbox_image(im, net->w, net->h);
         image sized = resizer.runResize(im);
-        save_image(sized, "resized");
         //image sized = resize_image(im, net->w, net->h);
         //image sized2 = resize_max(im, net->w);
         //image sized = crop_image(sized2, -((net->w - sized2.w)/2), -((net->h - sized2.h)/2), net->w, net->h);
