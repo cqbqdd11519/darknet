@@ -1,9 +1,162 @@
 #include "darknet.h"
 #include "cl_vfpga.hpp"
 
+#include <stdio.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+
 #ifdef __cplusplus
+#include <chrono>
+#include <vector>
+#include <string>
+#include <algorithm>
+
+#include "opencv2/core/core.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+#include "opencv2/highgui/highgui_c.h"
+#include "opencv2/opencv.hpp"
+
+using namespace cv;
 extern "C" {
 #endif
+
+static const std::string base64_chars =
+             "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+             "abcdefghijklmnopqrstuvwxyz"
+             "0123456789+/";
+
+
+static inline bool is_base64(unsigned char c) {
+  return (isalnum(c) || (c == '+') || (c == '/'));
+}
+
+std::string base64_encode(unsigned char const* bytes_to_encode, unsigned int in_len) {
+  std::string ret;
+  int i = 0;
+  int j = 0;
+  unsigned char char_array_3[3];
+  unsigned char char_array_4[4];
+
+  while (in_len--) {
+    char_array_3[i++] = *(bytes_to_encode++);
+    if (i == 3) {
+      char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+      char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+      char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+      char_array_4[3] = char_array_3[2] & 0x3f;
+
+      for(i = 0; (i <4) ; i++)
+        ret += base64_chars[char_array_4[i]];
+      i = 0;
+    }
+  }
+
+  if (i)
+  {
+    for(j = i; j < 3; j++)
+      char_array_3[j] = '\0';
+
+    char_array_4[0] = ( char_array_3[0] & 0xfc) >> 2;
+    char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+    char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+
+    for (j = 0; (j < i + 1); j++)
+      ret += base64_chars[char_array_4[j]];
+
+    while((i++ < 3))
+      ret += '=';
+
+  }
+
+  return ret;
+
+}
+
+std::string base64_decode(std::string const& encoded_string) {
+  int in_len = encoded_string.size();
+  int i = 0;
+  int j = 0;
+  int in_ = 0;
+  unsigned char char_array_4[4], char_array_3[3];
+  std::string ret;
+
+  while (in_len-- && ( encoded_string[in_] != '=') && is_base64(encoded_string[in_])) {
+    char_array_4[i++] = encoded_string[in_]; in_++;
+    if (i ==4) {
+      for (i = 0; i <4; i++)
+        char_array_4[i] = base64_chars.find(char_array_4[i]);
+
+      char_array_3[0] = ( char_array_4[0] << 2       ) + ((char_array_4[1] & 0x30) >> 4);
+      char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
+      char_array_3[2] = ((char_array_4[2] & 0x3) << 6) +   char_array_4[3];
+
+      for (i = 0; (i < 3); i++)
+        ret += char_array_3[i];
+      i = 0;
+    }
+  }
+
+  if (i) {
+    for (j = 0; j < i; j++)
+      char_array_4[j] = base64_chars.find(char_array_4[j]);
+
+    char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
+    char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
+
+    for (j = 0; (j < i - 1); j++) ret += char_array_3[j];
+  }
+
+  return ret;
+}
+
+void image_to_ipl(image* im, IplImage* disp){
+    int x,y,c;
+    int step = disp->widthStep;
+    for(y = 0; y < im->h; ++y){
+        for(x = 0; x < im->w; ++x){
+            for(c= 0; c < im->c; ++c){
+                float val = im->data[c*im->h*im->w + y*im->w + x];
+                disp->imageData[y*step + x*im->c + c] = (unsigned char)(val*255);
+            }
+        }
+    }
+}
+
+void ipl_to_image(IplImage* src, image* im){
+    int h = src->height;
+    int w = src->width;
+    int c = src->nChannels;
+    unsigned char *data = (unsigned char *)src->imageData;
+    int step = src->widthStep;
+    int i, j, k;
+
+    for(i = 0; i < h; ++i){
+        for(k= 0; k < c; ++k){
+            for(j = 0; j < w; ++j){
+                im->data[k*w*h + i*w + j] = data[i*step + j*c + k]/255.;
+            }
+        }
+    }
+}
+
+void image_to_mat(image* im, Mat mat){
+    rgbgr_image(*im);
+    IplImage ipl = mat;
+    image_to_ipl(im, &ipl);
+}
+
+image mat_to_image(Mat mat, image* im){
+    IplImage ipl = mat;
+    ipl_to_image(&ipl, im);
+    rgbgr_image(*im);
+}
 
 static int coco_ids[] = {1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,20,21,22,23,24,25,27,28,31,32,33,34,35,36,37,38,39,40,41,42,43,44,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,67,70,72,73,74,75,76,77,78,79,80,81,82,84,85,86,87,88,89,90};
 
@@ -575,223 +728,121 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
     CLvFPGA resizer;
     set_batch_network(net, 1);
     srand(2222222);
-    double time;
+    std::chrono::system_clock::time_point time_chrono;
     char buff[256];
     char *input = buff;
     float nms=.45;
-    while(1){
-        if(filename){
-            strncpy(input, filename, 256);
-        } else {
-            printf("Enter Image Path: ");
-            fflush(stdout);
-            input = fgets(input, 256, stdin);
-            if(!input) return;
-            strtok(input, "\n");
-        }
-        image im = load_image_color(input,0,0);
-        //image sized = letterbox_image(im, net->w, net->h);
-        image sized = resizer.runResize(im);
-        //image sized = resize_image(im, net->w, net->h);
-        //image sized2 = resize_max(im, net->w);
-        //image sized = crop_image(sized2, -((net->w - sized2.w)/2), -((net->h - sized2.h)/2), net->w, net->h);
-        //resize_network(net, sized.w, sized.h);
+
+    if(filename){
+        strncpy(input, filename, 256);
+    } else {
+        printf("Enter Image Path: ");
+        fflush(stdout);
+        input = fgets(input, 256, stdin);
+        if(!input) return;
+        strtok(input, "\n");
+    }
+
+    //Init Socket
+    std::string ip_cpp = "143.248.148.118";
+    std::string port_cpp = "5555";
+    struct sockaddr_in serv_addr;
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if(sockfd == -1)
+        exit(1);
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = inet_addr(ip_cpp.c_str());
+    serv_addr.sin_port = htons(atoi(port_cpp.c_str()));
+    if(connect(sockfd, (struct sockaddr*) &serv_addr, sizeof(serv_addr)) == -1)
+        exit(1);
+
+    VideoCapture cap;
+    if(!cap.open(std::string(input))){
+        std::cerr << "Cannot open input file "+std::string(input)+"\n";
+        exit(1);
+    }
+
+    auto totalFrame = cap.get(CV_CAP_PROP_FRAME_COUNT);
+    const size_t v_width  = (size_t) cap.get(CV_CAP_PROP_FRAME_WIDTH);
+    const size_t v_height = (size_t) cap.get(CV_CAP_PROP_FRAME_HEIGHT);
+
+    Mat frame, frame_out;
+    image im = make_image(v_width, v_height, 3);
+    image sized;
+
+    std::ostringstream out_s;
+    std::string info_str_cpp;
+    std::string encoded;
+    const char* encoded_c;
+    size_t framesCounter = 0;
+
+    int params[3] = {CV_IMWRITE_JPEG_QUALITY, 100, 0};
+    std::vector<unsigned char> buf;
+    unsigned char* ress;
+
+    ssize_t len;
+
+    double opencv_time;
+    double pre_time;
+    double yolo_time;
+    double total_time;
+
+    int nboxes = 0;
+
+    while(true){
+        time_chrono = std::chrono::system_clock::now();
+        if(!cap.read(frame)) break;
+        frame_out = frame.clone();
+        framesCounter++;
+
+        mat_to_image(frame, &im);
+        opencv_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now() - time_chrono).count() * 0.001;
+
+        time_chrono = std::chrono::system_clock::now();
+        sized = resizer.runResize(im);
+        pre_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now() - time_chrono).count() * 0.001;
+
+        time_chrono = std::chrono::system_clock::now();
         layer l = net->layers[net->n-1];
-
-
-        float *X = sized.data;
-        time=what_time_is_it_now();
-        network_predict(net, X);
-        printf("%s: Predicted in %f seconds.\n", input, what_time_is_it_now()-time);
-        int nboxes = 0;
+        network_predict(net, sized.data);
+        nboxes = 0;
         detection *dets = get_network_boxes(net, im.w, im.h, thresh, hier_thresh, 0, 1, &nboxes);
-        //printf("%d\n", nboxes);
-        //if (nms) do_nms_obj(boxes, probs, l.w*l.h*l.n, l.classes, nms);
         if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
         draw_detections(im, dets, nboxes, thresh, names, alphabet, l.classes);
-        free_detections(dets, nboxes);
-        if(outfile){
-            save_image(im, outfile);
-        }
-        else{
-            save_image(im, "predictions");
-#ifdef OPENCV
-            make_window("predictions", 512, 512, 0);
-            show_image(im, "predictions", 0);
-#endif
-        }
+        yolo_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now() - time_chrono).count() * 0.001;
 
-        free_image(im);
-        free_image(sized);
-        if (filename) break;
+        time_chrono = std::chrono::system_clock::now();
+        image_to_mat(&im, frame_out);
+        opencv_time += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now() - time_chrono).count() * 0.001;
+
+        total_time = opencv_time + pre_time + yolo_time;
+
+        out_s.str("");
+        out_s << std::fixed << std::setprecision(2) << "{"
+              << "\"cv\": " << opencv_time << ","
+              << "\"pre\": " << pre_time << ","
+              << "\"yolo\": " << yolo_time << ","
+              << "\"total\": " << total_time << ","
+              << "\"now_frame\": " << framesCounter << ","
+              << "\"total_frame\": " << totalFrame
+              << "}";
+        info_str_cpp = out_s.str();
+
+        imencode(".jpeg", frame_out, buf, std::vector<int>(params,params+2));
+        ress = reinterpret_cast<unsigned char*>(&buf[0]);
+        encoded = base64_encode(ress, buf.size())+info_str_cpp+"\n";
+        encoded_c = encoded.c_str();
+        len = send(sockfd, encoded_c, sizeof(char)*encoded.size(), 0);
+
+        //frame_out.release();
+        //free_detections(dets, nboxes);
+        //free_image(im);
+        //free_image(sized);
     }
+    close(sockfd);
 }
 
-/*
-void censor_detector(char *datacfg, char *cfgfile, char *weightfile, int cam_index, const char *filename, int class, float thresh, int skip)
-{
-#ifdef OPENCV
-    char *base = basecfg(cfgfile);
-    network *net = load_network(cfgfile, weightfile, 0);
-    set_batch_network(net, 1);
-
-    srand(2222222);
-    CvCapture * cap;
-
-    int w = 1280;
-    int h = 720;
-
-    if(filename){
-        cap = cvCaptureFromFile(filename);
-    }else{
-        cap = cvCaptureFromCAM(cam_index);
-    }
-
-    if(w){
-        cvSetCaptureProperty(cap, CV_CAP_PROP_FRAME_WIDTH, w);
-    }
-    if(h){
-        cvSetCaptureProperty(cap, CV_CAP_PROP_FRAME_HEIGHT, h);
-    }
-
-    if(!cap) error("Couldn't connect to webcam.\n");
-    cvNamedWindow(base, CV_WINDOW_NORMAL); 
-    cvResizeWindow(base, 512, 512);
-    float fps = 0;
-    int i;
-    float nms = .45;
-
-    while(1){
-        image in = get_image_from_stream(cap);
-        //image in_s = resize_image(in, net->w, net->h);
-        image in_s = letterbox_image(in, net->w, net->h);
-        layer l = net->layers[net->n-1];
-
-        float *X = in_s.data;
-        network_predict(net, X);
-        int nboxes = 0;
-        detection *dets = get_network_boxes(net, in.w, in.h, thresh, 0, 0, 0, &nboxes);
-        //if (nms) do_nms_obj(boxes, probs, l.w*l.h*l.n, l.classes, nms);
-        if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
-
-        for(i = 0; i < nboxes; ++i){
-            if(dets[i].prob[class] > thresh){
-                box b = dets[i].bbox;
-                int left  = b.x-b.w/2.;
-                int top   = b.y-b.h/2.;
-                censor_image(in, left, top, b.w, b.h);
-            }
-        }
-        show_image(in, base);
-        cvWaitKey(10);
-        free_detections(dets, nboxes);
-
-
-        free_image(in_s);
-        free_image(in);
-
-
-        float curr = 0;
-        fps = .9*fps + .1*curr;
-        for(i = 0; i < skip; ++i){
-            image in = get_image_from_stream(cap);
-            free_image(in);
-        }
-    }
-    #endif
-}
-
-void extract_detector(char *datacfg, char *cfgfile, char *weightfile, int cam_index, const char *filename, int class, float thresh, int skip)
-{
-#ifdef OPENCV
-    char *base = basecfg(cfgfile);
-    network *net = load_network(cfgfile, weightfile, 0);
-    set_batch_network(net, 1);
-
-    srand(2222222);
-    CvCapture * cap;
-
-    int w = 1280;
-    int h = 720;
-
-    if(filename){
-        cap = cvCaptureFromFile(filename);
-    }else{
-        cap = cvCaptureFromCAM(cam_index);
-    }
-
-    if(w){
-        cvSetCaptureProperty(cap, CV_CAP_PROP_FRAME_WIDTH, w);
-    }
-    if(h){
-        cvSetCaptureProperty(cap, CV_CAP_PROP_FRAME_HEIGHT, h);
-    }
-
-    if(!cap) error("Couldn't connect to webcam.\n");
-    cvNamedWindow(base, CV_WINDOW_NORMAL); 
-    cvResizeWindow(base, 512, 512);
-    float fps = 0;
-    int i;
-    int count = 0;
-    float nms = .45;
-
-    while(1){
-        image in = get_image_from_stream(cap);
-        //image in_s = resize_image(in, net->w, net->h);
-        image in_s = letterbox_image(in, net->w, net->h);
-        layer l = net->layers[net->n-1];
-
-        show_image(in, base);
-
-        int nboxes = 0;
-        float *X = in_s.data;
-        network_predict(net, X);
-        detection *dets = get_network_boxes(net, in.w, in.h, thresh, 0, 0, 1, &nboxes);
-        //if (nms) do_nms_obj(boxes, probs, l.w*l.h*l.n, l.classes, nms);
-        if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
-
-        for(i = 0; i < nboxes; ++i){
-            if(dets[i].prob[class] > thresh){
-                box b = dets[i].bbox;
-                int size = b.w*in.w > b.h*in.h ? b.w*in.w : b.h*in.h;
-                int dx  = b.x*in.w-size/2.;
-                int dy  = b.y*in.h-size/2.;
-                image bim = crop_image(in, dx, dy, size, size);
-                char buff[2048];
-                sprintf(buff, "results/extract/%07d", count);
-                ++count;
-                save_image(bim, buff);
-                free_image(bim);
-            }
-        }
-        free_detections(dets, nboxes);
-
-
-        free_image(in_s);
-        free_image(in);
-
-
-        float curr = 0;
-        fps = .9*fps + .1*curr;
-        for(i = 0; i < skip; ++i){
-            image in = get_image_from_stream(cap);
-            free_image(in);
-        }
-    }
-    #endif
-}
-*/
-
-/*
-void network_detect(network *net, image im, float thresh, float hier_thresh, float nms, detection *dets)
-{
-    network_predict_image(net, im);
-    layer l = net->layers[net->n-1];
-    int nboxes = num_boxes(net);
-    fill_network_boxes(net, im.w, im.h, thresh, hier_thresh, 0, 0, dets);
-    if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
-}
-*/
 
 void run_detector(int argc, char **argv)
 {

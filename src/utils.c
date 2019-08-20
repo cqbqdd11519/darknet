@@ -24,6 +24,15 @@ double get_wall_time()
 }
 */
 
+double what_time_is_it_now_ms()
+{
+    struct timeval time;
+    if (gettimeofday(&time,NULL)){
+        return 0;
+    }
+    return (double)time.tv_sec + (double)time.tv_usec * .001;
+}
+
 double what_time_is_it_now()
 {
     struct timeval time;

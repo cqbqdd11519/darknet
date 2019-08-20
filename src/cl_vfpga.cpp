@@ -111,8 +111,8 @@ image CLvFPGA::runResize(image img){
 
   float* input_host = (float*) img.data;
 
-  input = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, width * height * 3 * sizeof(float), input_host, &status);
-  checkError(status, "Input Buffer fail");
+  status = clEnqueueWriteBuffer(queue, input, CL_FALSE, 0, width*height*3*sizeof(float), img.data, 0, NULL, &ev);
+  checkError(status, "Write error");
 
   status  = clSetKernelArg(kernel, 0, sizeof(int), &width);
   status |= clSetKernelArg(kernel, 1, sizeof(int), &height);
@@ -126,6 +126,8 @@ image CLvFPGA::runResize(image img){
   status |= clSetKernelArg(kernel, 9, sizeof(cl_mem), &input);
   status |= clSetKernelArg(kernel, 10, sizeof(cl_mem), &output);
   checkError(status, "Set arg error");
+
+  clWaitForEvents(1,&ev);
 
   const size_t global[2] = {OUT_W, OUT_H};
   const size_t local[2] = {BLOCK_W, BLOCK_H};

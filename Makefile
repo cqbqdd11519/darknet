@@ -42,12 +42,12 @@ endif
 
 CFLAGS+=$(OPTS)
 
-ifeq ($(OPENCV), 1) 
-COMMON+= -DOPENCV
-CFLAGS+= -DOPENCV
+#ifeq ($(OPENCV), 1) 
+#COMMON+= -DOPENCV
+#CFLAGS+= -DOPENCV
 LDFLAGS+= `pkg-config --libs opencv` -lstdc++
 COMMON+= `pkg-config --cflags opencv` 
-endif
+#endif
 
 ifeq ($(GPU), 1) 
 COMMON+= -DGPU -I/usr/local/cuda/include/
